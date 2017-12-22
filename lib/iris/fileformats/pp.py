@@ -1047,6 +1047,7 @@ class PPField(six.with_metaclass(abc.ABCMeta, object)):
         calendar = cf_units.CALENDAR_GREGORIAN
         if self.lbtim.ic == 2:
             calendar = cf_units.CALENDAR_360_DAY
+            calendar = cf_units.CALENDAR_360_DAY
         elif self.lbtim.ic == 4:
             calendar = cf_units.CALENDAR_365_DAY
         return calendar

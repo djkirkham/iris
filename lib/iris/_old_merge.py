@@ -1664,6 +1664,7 @@ class ProtoCube(object):
                                   len(axis_dict) + 1),
                     coord._as_defn())
 
+
         # Order the coordinates by hints, axis, and definition.
         for coord in sorted(coords, key=key_func):
             if not cube.coord_dims(coord) and coord.shape == (1,):

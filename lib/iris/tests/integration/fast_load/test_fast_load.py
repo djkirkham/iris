@@ -454,9 +454,13 @@ class MixinDimsAndOrdering(object):
         flds = self.fields(c_t='00001111',
                            c_h='00110011',
                            phn='01010101')
+        for fld in flds:
+            print(fld)
         file = self.save_fieldcubes(flds)
         results = iris.load(file)
         expected = CubeList(flds).merge()
+        print(results)
+        print(expected)
         self.assertEqual(results, expected)
 
     def test_odd_order(self):
@@ -593,8 +597,10 @@ class MixinProblemCases(object):
         # Show how pseudo levels are handled.
         flds = self.fields(c_t='000111222',
                            pse='123123123')
+        iris.save(flds, os.path.expanduser(os.path.join('~', 'my.pp')))
         file = self.save_fieldcubes(flds)
         results = iris.load(file)
+
         expected = CubeList(flds).merge()
 
 # NOTE: this problem is now fixed : Structured load gives the same answer.

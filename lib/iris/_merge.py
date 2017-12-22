@@ -1,1 +1,1 @@
-from _new_merge import ProtoCube
+from _new_merge import *

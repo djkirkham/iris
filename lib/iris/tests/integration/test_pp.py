@@ -273,7 +273,7 @@ class TestVertical(tests.IrisTest):
         msg = 'Multiple reference cubes for surface_air_pressure'
         with mock.patch('iris.fileformats.pp.load',
                         new=load) as load, mock.patch('warnings.warn') as warn:
-            _, _, _ = iris.fileformats.pp.load_cubes('DUMMY')
+            print(list(iris.fileformats.pp.load_cubes('DUMMY')))
             warn.assert_called_with(msg)
 
     def test_hybrid_height_with_non_standard_coords(self):

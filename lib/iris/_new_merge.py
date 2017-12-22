@@ -42,7 +42,8 @@ def _cells_points(cells, dtype):
     return ret
 
 def _cells_bounds(cells, dtype):
-    if cells.flat[0].bound is not None:
+    print(cells)
+    if cells.size > 0 and cells.flat[0].bound is not None:
         ret = np.empty(cells.shape + (2,), dtype=dtype)
         ret.flat = np.array([cell.bound for cell in cells.flat])
         return ret
@@ -448,8 +449,7 @@ class ProtoCube(object):
         """
 
         # Default hint ordering for candidate dimension coordinates.
-        self._hints = ['time', 'forecast_reference_time', 'forecast_period',
-                       'model_level_number']
+        self._hints = ['time', 'forecast_reference_time', 'forecast_period']
 
         # The proto-cube source.
         self._source = cube
@@ -524,7 +524,7 @@ class ProtoCube(object):
         hint_dict = {name: i for i, name in zip(range(len(self._hints), 0, -1),
                                                 self._hints[::-1])}
         # Coordinate axis ordering dictionary.
-        axis_dict = {'T': 0, 'Z': 1, 'Y': 2, 'X': 3}
+        axis_dict = {'T': 1, 'Z': 2, 'Y': 3, 'X': 4}
 
         # Coordinate sort function.
         # NB. This makes use of two properties which don't end up in
@@ -534,9 +534,8 @@ class ProtoCube(object):
             points_dtype = coord.dtype
             return (not np.issubdtype(points_dtype, np.number),
                     not isinstance(coord, iris.coords.DimCoord),
-                    hint_dict.get(coord.name(), len(hint_dict) + 1),
-                    axis_dict.get(iris.util.guess_coord_axis(coord),
-                                  len(axis_dict) + 1),
+                    axis_dict.get(iris.util.guess_coord_axis(coord), 0),
+                    hint_dict.get(coord.name(), 0),
                     coord._as_defn())
 
         # Order the coordinates by hints, axis, and definition.
@@ -627,11 +626,12 @@ class ProtoCube(object):
                 self._add_cube(cube, coord_payload)
         return match
 
-    def order_and_reshape(self, scalar_values, data_stack, shape, coord_dims):
-        order = np.lexsort(scalar_values[coord_dims[::-1]])
+    def _order_and_reshape(self, scalar_values, data_stack, shape, coord_dims):
+        if coord_dims:
+            order = np.lexsort(scalar_values[coord_dims[::-1]])
 
-        scalar_values = scalar_values[:, order]
-        data_stack = data_stack[order]
+            scalar_values = scalar_values[:, order]
+            data_stack = data_stack[order]
 
         scalar_values.shape = (-1,) + shape
         data_stack.shape = shape
@@ -649,8 +649,9 @@ class ProtoCube(object):
 
         dim_coords_and_dims = []
         aux_coords_and_dims = []
+
         for values, defn, metadata, dim_coord_dim in zip(
-                scalar_values,
+                scalar_values[..., None],
                 self._coord_signature.scalar_defns,
                 self._coord_metadata,
                 dim_coord_dims):
@@ -661,9 +662,11 @@ class ProtoCube(object):
                               (slice(None),) + \
                               (0,) * (ndims - dim_coord_dim - 1)
                 points = _cells_points(values[value_slice],
-                                       metadata.points_dtype)
+                                       metadata.points_dtype)[..., 0]
                 bounds = _cells_bounds(values[value_slice],
                                        metadata.bounds_dtype)
+                if bounds is not None:
+                    bounds = bounds[..., 0, :]
                 dim_coords_and_dims.append(
                     (iris.coords.DimCoord(points, bounds=bounds, **kwargs),
                      dim_coord_dim))
@@ -677,19 +680,31 @@ class ProtoCube(object):
                     value_slice = tuple(slice(None) if spans_dim else 0
                                          for spans_dim in spans_dims)
                     coord_dims = tuple(np.where(spans_dims)[0])
+                elif values.ndim == 1:
+                    # No new dimensions
+                    value_slice = ()
+                    coord_dims = ()
                 else:
                     # Anonymous dimension
                     value_slice = ()
                     coord_dims = (0,)
 
                 points = _cells_points(values[value_slice],
-                                       metadata.points_dtype)
+                                       metadata.points_dtype)[..., 0]
                 bounds = _cells_bounds(values[value_slice],
                                        metadata.bounds_dtype)
-                kwargs.pop('circular', None)
-                aux_coords_and_dims.append(
-                    (iris.coords.AuxCoord(points, bounds=bounds, **kwargs),
-                     coord_dims))
+                if bounds is not None:
+                    bounds = bounds[..., 0, :]
+
+                try:
+                    coord = iris.coords.DimCoord(points, bounds=bounds,
+                                                 **kwargs)
+                except ValueError:
+                    kwargs.pop('circular', None)
+                    coord = iris.coords.AuxCoord(points, bounds=bounds,
+                                                 **kwargs)
+
+                aux_coords_and_dims.append((coord, coord_dims))
 
         return dim_coords_and_dims, aux_coords_and_dims
 
@@ -726,11 +741,19 @@ class ProtoCube(object):
         return cube
 
     def merge(self, unique=True):
+        import sys
+        print(self._source)
+        for defn in self._coord_signature.scalar_defns:
+            print('{} '.format(defn.standard_name or defn.long_name))
+        print()
+
+
         ncoords = len(self._coord_metadata)
         nvalues = len(self._skeletons)
         scalar_values = np.empty((ncoords, nvalues), dtype=object)
         scalar_values.T[:] = [skeleton.scalar_values
                               for skeleton in self._skeletons]
+
         data_stack = np.empty(nvalues, 'object')
         for i in range(nvalues):
             data_stack[i] = self._skeletons[i].data
@@ -741,18 +764,19 @@ class ProtoCube(object):
         if candidate_shapes:
             shape, dim_indices = self._choose_new_dims(candidate_shapes,
                                                        candidate_dim_indices)
-            scalar_values, data_stack = self.order_and_reshape(scalar_values,
-                                                               data_stack,
-                                                               shape,
-                                                               dim_indices)
+            scalar_values, data_stack = self._order_and_reshape(scalar_values,
+                                                                data_stack,
+                                                                shape,
+                                                                dim_indices)
         else:
             shape = (nvalues,)
             dim_indices = []
-            scalar_values, data_stack = self.order_and_reshape(scalar_values,
-                                                               data_stack,
-                                                               shape,
-                                                               list(range(
-                                                                   ncoords)))
+            scalar_values, data_stack = self._order_and_reshape(scalar_values,
+                                                                data_stack,
+                                                                shape,
+                                                                list(range(
+                                                                    ncoords)))
+
 
         new_dim_coords_and_dims, new_aux_coords_and_dims = \
             self._build_coordinates(scalar_values, dim_indices)
@@ -835,9 +859,10 @@ class ProtoCube(object):
             row_indices = np.arange(len(scalar_values))
 
         ncoords, nvalues = scalar_values.shape
+        DEBUG(scalar_values.shape)
 
         if nvalues < 2:
-            return [], []
+            return [()], [[]]
 
         # For each row, get a dictionary of the indices for each distinct
         # element.
@@ -851,22 +876,33 @@ class ProtoCube(object):
         candidate_dim_indices = []
         for element_indices in all_element_indices:
             row = row_indices[0]
+            DEBUG('Trying row {}'.format(row))
             indices = element_indices.values()
             counts = np.array([len(v) for v in indices])
             # To be a dim coord, the number of occurrences of each element must
             # be the same.
-            if _all_same(counts):
+            if _all_same(counts) and counts[0] < nvalues:
                 count = counts[0]
                 dim_len = nvalues // count
+                DEBUG('It is a potential candidate dimension of length {}'.format(dim_len))
+                DEBUG('    {}'.format(indices), level=2)
 
                 if count == 1:
                     # If there is only one occurence of each element then this
                     # row can form a dimension with no additional dimensions.
+                    DEBUG('Its values are all distinct')
                     new_shape = (dim_len, count) if count > 1 else (dim_len,)
+                    DEBUG('Appending shape: {}'.format(new_shape))
+                    DEBUG('Appending row: {}'.format(row))
                     candidate_shapes.append(new_shape)
                     candidate_dim_indices.append([row])
                 else:
                     # Otherwise, we need to find a row or rows that can form
+                    DEBUG('Its values are not distinct.')
+                    DEBUG('Finding independent coords')
+                    for a in scalar_values:
+                        DEBUG([list(set(a[idx])) for idx in indices], level=2)
+                    independents = []
                     # the remaining dimensions.
                     # Find which rows are 'independent' of this row. That is,
                     # for each of the other rows check that:
@@ -941,9 +977,14 @@ class ProtoCube(object):
                         # independent rows.
                         sub_values = \
                             scalar_values[independents][ ..., indices[0]]
+                        DEBUG('There are potential extra dimensions at rows {}'.format([ row_indices[i] for i in independents]))
+                        DEBUG('Recursing with new array:')
+                        DEBUG(sub_values, shift=4)
                         sub_shapes, sub_dim_indices = \
                             ProtoCube._get_new_dims_candidates(
                                 sub_values, row_indices[independents])
+                        DEBUG('Extending shapes: {}'.format([(dim_len,) + shape  for shape in sub_shapes]))
+                        DEBUG('Extending rows: {}'.format([[row] + dim_indices for dim_indices in sub_dim_indices]))
                         # Extend each sub- dimension coord list and sub-shape
                         # with the current row index and length as a dimension
                         # coordinate.
@@ -952,8 +993,24 @@ class ProtoCube(object):
                         candidate_dim_indices.extend(
                             [[row] + dim_indices for dim_indices in
                              sub_dim_indices])
+                    else:
+                        DEBUG('There are no possible extra dimensions. Not adding this dimension.')
             # Eliminate this row from the search.
             scalar_values = scalar_values[1:]
             row_indices = row_indices[1:]
 
+        DEBUG('Shapes found at this level: {}'.format(candidate_shapes))
+        DEBUG('Dim coords found at this level: {}'.format(candidate_dim_indices), shift=-4)
+
         return candidate_shapes, candidate_dim_indices
+
+DEBUG_LEVEL = 1
+ind = 0
+
+def DEBUG(s, shift=0, level=1):
+    global ind
+    indent = '_' * ind
+    if level <= DEBUG_LEVEL:
+        print(indent + str(s))
+
+    ind += shift

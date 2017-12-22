@@ -109,11 +109,12 @@ class TestSkipField(tests.IrisTest):
     def test_missing_lbrel(self):
         infile = tests.get_data_path(('FF', 'lbrel_missing'))
         with mock.patch('warnings.warn') as warn_fn:
-            fields = iris.load(infile)
+            fields = iris.load_cube(infile)
         self.assertIn("Input field skipped as PPField creation failed : "
                       "error = 'Unsupported header release number: -32768'",
                       warn_fn.call_args[0][0])
-        self.assertEqual(len(fields), 2)
+        self.assertEqual(fields.ndim , 3)
+        self.assertEqual(fields.shape[0], 2)
 
 
 if __name__ == '__main__':
