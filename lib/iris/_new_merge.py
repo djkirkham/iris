@@ -433,7 +433,7 @@ class _FactoryDefn(namedtuple('_FactoryDefn',
     __slots__ = ()
 
 
-class ProtoCube:
+class ProtoCube(object):
     """
     Framework for merging source-cubes into one or more higher
     dimensional cubes.
@@ -627,17 +627,15 @@ class ProtoCube:
                 self._add_cube(cube, coord_payload)
         return match
 
-    def order_and_reshape(self, scalar_values, data_stack, shape, dim_indices):
-        final_order = np.arange(scalar_values.shape[1])
-        for index in dim_indices[::-1]:
-            order = np.argsort(scalar_values[index])
-            scalar_values = scalar_values[:, order]
-            final_order = final_order[order]
+    def order_and_reshape(self, scalar_values, data_stack, shape, coord_dims):
+        order = np.lexsort(scalar_values[coord_dims[::-1]])
 
-        data_stack = data_stack[final_order]
+        scalar_values = scalar_values[:, order]
+        data_stack = data_stack[order]
 
         scalar_values.shape = (-1,) + shape
         data_stack.shape = shape
+
         return scalar_values, data_stack
 
     def _choose_new_dims(self, candidate_shapes, candidate_dim_indices):
@@ -645,48 +643,50 @@ class ProtoCube:
         return candidate_shapes[0], candidate_dim_indices[0]
 
     def _build_coordinates(self, scalar_values, dim_indices):
-        dim_coord_dims = np.repeat(-1, len(scalar_values))
-        dim_coord_dims[dim_indices] = range(len(dim_indices))
         ndims = len(dim_indices)
+        dim_coord_dims = np.repeat(-1, len(scalar_values))
+        dim_coord_dims[dim_indices] = range(ndims)
 
         dim_coords_and_dims = []
         aux_coords_and_dims = []
-        for row in range(len(scalar_values)):
-            kwargs = self._coord_signature.scalar_defns[row]._asdict()
-            kwargs.update(self._coord_metadata[row].kwargs)
-            if dim_coord_dims[row] != -1:
-                value_slice = [0] * (ndims + 1)
-                value_slice[0] = row
-                value_slice[dim_coord_dims[row] + 1] = slice(None)
-                value_slice = tuple(value_slice)
-                points = _cells_points(scalar_values[value_slice],
-                                       self._coord_metadata[row].points_dtype)
-                bounds = _cells_bounds(scalar_values[value_slice],
-                                       self._coord_metadata[row].bounds_dtype)
-
+        for values, defn, metadata, dim_coord_dim in zip(
+                scalar_values,
+                self._coord_signature.scalar_defns,
+                self._coord_metadata,
+                dim_coord_dims):
+            kwargs = defn._asdict()
+            kwargs.update(metadata.kwargs)
+            if dim_coord_dim != -1:
+                value_slice = (0,) * dim_coord_dim + \
+                              (slice(None),) + \
+                              (0,) * (ndims - dim_coord_dim - 1)
+                points = _cells_points(values[value_slice],
+                                       metadata.points_dtype)
+                bounds = _cells_bounds(values[value_slice],
+                                       metadata.bounds_dtype)
                 dim_coords_and_dims.append(
                     (iris.coords.DimCoord(points, bounds=bounds, **kwargs),
-                     dim_coord_dims[row]))
+                     dim_coord_dim))
             else:
-                value_slice = [row]
-                coord_dims = []
-                for dim_index in dim_indices:
-                    dim_coord_dim = dim_coord_dims[dim_index]
-                    slc = [slice(None)] * (ndims + 1)
-                    slc[0] = row
-                    slc[dim_coord_dim + 1] = 0
-                    slc = tuple(slc)
-                    if np.all(scalar_values[slc] == scalar_values[row]):
-                        value_slice.append(0)
-                    else:
-                        value_slice.append(slice(None))
-                        coord_dims.append(dim_coord_dim)
-                value_slice = tuple(value_slice)
-                coord_dims = tuple(coord_dims)
-                points = _cells_points(scalar_values[value_slice],
-                                       self._coord_metadata[row].points_dtype)
-                bounds = _cells_bounds(scalar_values[value_slice],
-                                       self._coord_metadata[row].bounds_dtype)
+                if dim_indices:
+                    # Find the indices spanned by the aux coord. If all the
+                    # slices along a given dimension are the same, the coord
+                    # does not span that dimension.
+                    spans_dims = [np.any(values.take([0], axis=dim) != values)
+                                  for dim in range(ndims)]
+                    value_slice = tuple(slice(None) if spans_dim else 0
+                                         for spans_dim in spans_dims)
+                    coord_dims = tuple(np.where(spans_dims)[0])
+                else:
+                    # Anonymous dimension
+                    value_slice = ()
+                    coord_dims = (0,)
+
+                points = _cells_points(values[value_slice],
+                                       metadata.points_dtype)
+                bounds = _cells_bounds(values[value_slice],
+                                       metadata.bounds_dtype)
+                kwargs.pop('circular', None)
                 aux_coords_and_dims.append(
                     (iris.coords.AuxCoord(points, bounds=bounds, **kwargs),
                      coord_dims))
@@ -726,33 +726,46 @@ class ProtoCube:
         return cube
 
     def merge(self, unique=True):
-        scalar_values = np.empty((len(self._coord_metadata),
-                                  len(self._skeletons)), dtype=object)
+        ncoords = len(self._coord_metadata)
+        nvalues = len(self._skeletons)
+        scalar_values = np.empty((ncoords, nvalues), dtype=object)
         scalar_values.T[:] = [skeleton.scalar_values
                               for skeleton in self._skeletons]
-        data_stack = np.empty(len(self._skeletons), 'object')
-        data_stack[:] = [skeleton.data for skeleton in self._skeletons]
+        data_stack = np.empty(nvalues, 'object')
+        for i in range(nvalues):
+            data_stack[i] = self._skeletons[i].data
 
         candidate_shapes, candidate_dim_indices = \
             self._get_new_dims_candidates(scalar_values)
 
-        shape, dim_indices = self._choose_new_dims(candidate_shapes,
-                                                   candidate_dim_indices)
-        scalar_values, data_stack = self.order_and_reshape(scalar_values,
-                                                           data_stack, shape,
-                                                           dim_indices)
-
+        if candidate_shapes:
+            shape, dim_indices = self._choose_new_dims(candidate_shapes,
+                                                       candidate_dim_indices)
+            scalar_values, data_stack = self.order_and_reshape(scalar_values,
+                                                               data_stack,
+                                                               shape,
+                                                               dim_indices)
+        else:
+            shape = (nvalues,)
+            dim_indices = []
+            scalar_values, data_stack = self.order_and_reshape(scalar_values,
+                                                               data_stack,
+                                                               shape,
+                                                               list(range(
+                                                                   ncoords)))
 
         new_dim_coords_and_dims, new_aux_coords_and_dims = \
             self._build_coordinates(scalar_values, dim_indices)
 
+
+        # Create lists combining the new vector coordinates with the existing
+        # ones, offsetting the dims of the existing coordinates by the number
+        # of new dimensions.
         offset = len(shape)
 
-        import pdb
-        pdb.set_trace()
         dim_coords_and_dims = \
             new_dim_coords_and_dims + \
-            [(coord, dim + offset) for coord, (dim,) in
+            [(coord, (dim + offset,)) for coord, (dim,) in
              self._coord_signature.vector_dim_coords_and_dims]
         aux_coords_and_dims = \
             new_aux_coords_and_dims + \
@@ -761,11 +774,7 @@ class ProtoCube:
 
         data = multidim_lazy_stack(data_stack)
 
-        return [self._get_cube(data,
-                               dim_coords_and_dims,
-                               aux_coords_and_dims)]
-
-
+        return [self._get_cube(data, dim_coords_and_dims, aux_coords_and_dims)]
 
     def _build_signature(self, cube):
         """
@@ -801,7 +810,7 @@ class ProtoCube:
 
         * scalar_values: list, N*M.
         * row_indices: list, N. The row indices in the original array,
-            for determinig dim_coords indices.
+            for determining dim_coords indices.
 
         Returns:
 
@@ -828,7 +837,7 @@ class ProtoCube:
         ncoords, nvalues = scalar_values.shape
 
         if nvalues < 2:
-            return []
+            return [], []
 
         # For each row, get a dictionary of the indices for each distinct
         # element.
@@ -844,7 +853,7 @@ class ProtoCube:
             row = row_indices[0]
             indices = element_indices.values()
             counts = np.array([len(v) for v in indices])
-            # To be a dim coord, the number of occurences of each element must
+            # To be a dim coord, the number of occurrences of each element must
             # be the same.
             if _all_same(counts):
                 count = counts[0]
@@ -930,8 +939,8 @@ class ProtoCube:
                     if independents:
                         # Only look at one subset of the values for the
                         # independent rows.
-                        sub_values = scalar_values[independents][
-                            ..., indices[0]]
+                        sub_values = \
+                            scalar_values[independents][ ..., indices[0]]
                         sub_shapes, sub_dim_indices = \
                             ProtoCube._get_new_dims_candidates(
                                 sub_values, row_indices[independents])
