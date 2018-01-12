@@ -58,10 +58,20 @@ class ConcreteReferenceTarget(object):
             if len(src_cubes) > 1:
                 # Merge the reference cubes to allow for
                 # time-varying surface pressure in hybrid-presure.
-                src_cubes = src_cubes.merge(unique=False)
+                src_cubes = src_cubes.merge()
+
                 if len(src_cubes) > 1:
                     warnings.warn('Multiple reference cubes for {}'
                                   .format(self.name))
+                else:
+                    src_cube = src_cubes[0]
+                    dim_coord_dims = [src_cube.coord_dims(coord)[0]
+                                      for coord in src_cube.dim_coords]
+                    if 0 not in dim_coord_dims:
+                         warnings.warn('Multiple reference cubes for {}'
+                                       .format(self.name))
+                         src_cubes = [src_cube[0]]
+
             src_cube = src_cubes[-1]
 
             if self.transform is None:
@@ -161,6 +171,7 @@ def _dereference_args(factory, reference_targets, regrid_cache, cube):
                 # If necessary, regrid the reference cube to
                 # match the grid of this cube.
                 src = _ensure_aligned(regrid_cache, src, cube)
+                print ('REF CUBE', src)
                 if src is not None:
                     new_coord = iris.coords.AuxCoord(src.data,
                                                      src.standard_name,

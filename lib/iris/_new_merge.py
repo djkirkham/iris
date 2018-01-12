@@ -459,6 +459,8 @@ class ProtoCube(object):
 
         # Extract the scalar and vector coordinate data and metadata
         # from the cube.
+        import pdb
+        pdb.set_trace()
         coord_payload = self._extract_coord_payload(cube)
 
         # The coordinate signature defines the scalar and vector
@@ -742,7 +744,7 @@ class ProtoCube(object):
 
     def merge(self, unique=True):
         import sys
-        print(self._source)
+        print('SOURCE', self._source)
         for defn in self._coord_signature.scalar_defns:
             print('{} '.format(defn.standard_name or defn.long_name))
         print()
@@ -978,8 +980,8 @@ class ProtoCube(object):
                         sub_values = \
                             scalar_values[independents][ ..., indices[0]]
                         DEBUG('There are potential extra dimensions at rows {}'.format([ row_indices[i] for i in independents]))
-                        DEBUG('Recursing with new array:')
-                        DEBUG(sub_values, shift=4)
+                        DEBUG('Recursing with new array:', shift=4)
+                        DEBUG(sub_values, level=2)
                         sub_shapes, sub_dim_indices = \
                             ProtoCube._get_new_dims_candidates(
                                 sub_values, row_indices[independents])
