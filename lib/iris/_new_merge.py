@@ -9,7 +9,7 @@ import numpy as np
 
 import iris.exceptions
 import iris.coords
-from iris._lazy_data import multidim_lazy_stack
+from iris._lazy_data import as_concrete_data, is_lazy_data, multidim_lazy_stack
 
 
 def _all_same(a):
@@ -42,7 +42,6 @@ def _cells_points(cells, dtype):
     return ret
 
 def _cells_bounds(cells, dtype):
-    print(cells)
     if cells.size > 0 and cells.flat[0].bound is not None:
         ret = np.empty(cells.shape + (2,), dtype=dtype)
         ret.flat = np.array([cell.bound for cell in cells.flat])
@@ -459,8 +458,6 @@ class ProtoCube(object):
 
         # Extract the scalar and vector coordinate data and metadata
         # from the cube.
-        import pdb
-        pdb.set_trace()
         coord_payload = self._extract_coord_payload(cube)
 
         # The coordinate signature defines the scalar and vector
@@ -759,6 +756,7 @@ class ProtoCube(object):
         data_stack = np.empty(nvalues, 'object')
         for i in range(nvalues):
             data_stack[i] = self._skeletons[i].data
+        any_lazy = any(is_lazy_data(d) for d in data_stack)
 
         candidate_shapes, candidate_dim_indices = \
             self._get_new_dims_candidates(scalar_values)
@@ -776,8 +774,9 @@ class ProtoCube(object):
             scalar_values, data_stack = self._order_and_reshape(scalar_values,
                                                                 data_stack,
                                                                 shape,
-                                                                list(range(
-                                                                    ncoords)))
+                                                                #list(range(
+                                                                #    ncoords)))
+                                                                None)
 
 
         new_dim_coords_and_dims, new_aux_coords_and_dims = \
@@ -799,6 +798,8 @@ class ProtoCube(object):
              self._coord_signature.vector_aux_coords_and_dims]
 
         data = multidim_lazy_stack(data_stack)
+        if not any_lazy:
+            data = as_concrete_data(data)
 
         return [self._get_cube(data, dim_coords_and_dims, aux_coords_and_dims)]
 
@@ -835,6 +836,7 @@ class ProtoCube(object):
         Args:
 
         * scalar_values: list, N*M.
+        * all_scalar_values: list, L*M. The original array.
         * row_indices: list, N. The row indices in the original array,
             for determining dim_coords indices.
 
@@ -899,12 +901,12 @@ class ProtoCube(object):
                     candidate_shapes.append(new_shape)
                     candidate_dim_indices.append([row])
                 else:
-                    # Otherwise, we need to find a row or rows that can form
                     DEBUG('Its values are not distinct.')
                     DEBUG('Finding independent coords')
                     for a in scalar_values:
                         DEBUG([list(set(a[idx])) for idx in indices], level=2)
                     independents = []
+                    # Otherwise, we need to find a row or rows that can form
                     # the remaining dimensions.
                     # Find which rows are 'independent' of this row. That is,
                     # for each of the other rows check that:
@@ -996,6 +998,8 @@ class ProtoCube(object):
                             [[row] + dim_indices for dim_indices in
                              sub_dim_indices])
                     else:
+                        # XXX: Check if the combinations of remaining values
+                        # are all unique
                         DEBUG('There are no possible extra dimensions. Not adding this dimension.')
             # Eliminate this row from the search.
             scalar_values = scalar_values[1:]

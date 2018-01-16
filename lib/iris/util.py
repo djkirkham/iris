@@ -262,7 +262,7 @@ def guess_coord_axis(coord):
     elif (coord.units.is_convertible('hPa') or
           coord.attributes.get('positive') in ('up', 'down')):
         axis = 'Z'
-    elif coord.units.is_time_reference():
+    elif coord.units.is_time_reference() or coord.units.is_time():
         axis = 'T'
 
     return axis
