@@ -642,13 +642,16 @@ class ProtoCube(object):
         return candidate_shapes[0], candidate_dim_indices[0]
 
     def _build_coordinates(self, scalar_values, dim_indices):
-        ndims = len(dim_indices)
+        ndims = scalar_values.ndim - 1
+        ndim_coords = len(dim_indices)
         dim_coord_dims = np.repeat(-1, len(scalar_values))
-        dim_coord_dims[dim_indices] = range(ndims)
+        dim_coord_dims[dim_indices] = range(ndim_coords)
 
         dim_coords_and_dims = []
         aux_coords_and_dims = []
 
+        # scalar_values may be 0-d, so we add an extra axis when looping to be
+        # able to treat the 0-d and N-d cases uniformally.
         for values, defn, metadata, dim_coord_dim in zip(
                 scalar_values[..., None],
                 self._coord_signature.scalar_defns,
@@ -998,9 +1001,11 @@ class ProtoCube(object):
                             [[row] + dim_indices for dim_indices in
                              sub_dim_indices])
                     else:
-                        # XXX: Check if the combinations of remaining values
-                        # are all unique
-                        DEBUG('There are no possible extra dimensions. Not adding this dimension.')
+                        # Add anonymous dimension
+                        DEBUG('There are no possible extra dimension coordinates. Adding this dimension with an anonymous dimension')
+                        candidate_shapes.append((dim_len, count))
+                        candidate_dim_indices.append([row])
+
             # Eliminate this row from the search.
             scalar_values = scalar_values[1:]
             row_indices = row_indices[1:]
