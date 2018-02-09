@@ -78,7 +78,8 @@ class TestLoad(tests.IrisTest):
             tests.get_data_path(['PP', 'aPPglob1', 'gl?bal.pp'])
         )
         cubes = iris.load(paths)
-        self.assertEqual(len(cubes), 2)
+        self.assertEqual(len(cubes), 1)
+        self.assertEqual(cubes[0].shape[0], 2)
 
 
 @tests.skip_data
@@ -101,8 +102,9 @@ class TestLoadCube(tests.IrisTest):
             tests.get_data_path(['PP', 'aPPglob1', 'global.pp']),
             tests.get_data_path(['PP', 'aPPglob1', 'gl?bal.pp'])
         )
-        with self.assertRaises(iris.exceptions.ConstraintMismatchError):
-            iris.load_cube(paths)
+        cube = iris.load_cube(paths)
+        self.assertEqual(cube.shape[0], 2)
+
 
 
 @tests.skip_data
@@ -133,8 +135,8 @@ class TestLoadCubes(tests.IrisTest):
             tests.get_data_path(['PP', 'aPPglob1', 'global.pp']),
             tests.get_data_path(['PP', 'aPPglob1', 'gl?bal.pp'])
         )
-        with self.assertRaises(iris.exceptions.ConstraintMismatchError):
-            iris.load_cube(paths)
+        cube = iris.load_cube(paths)
+        self.assertEqual(cube.shape[0], 2)
 
 
 class TestOpenDAP(tests.IrisTest):

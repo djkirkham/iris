@@ -1,4 +1,4 @@
-# (C) British Crown Copyright 2010 - 2017, Met Office
+# (C) British Crown Copyright 2010 - 2018, Met Office
 #
 # This file is part of Iris.
 #
@@ -1340,13 +1340,15 @@ class ProtoCube(object):
             axis_dict = {'T': 1, 'Z': 2, 'Y': 3, 'X': 4}
             axis_index = axis_dict.get(self._guess_axis(name), 0)
             # The middle element ensures sorting is the same as Python 2.
-            return (axis_index, not isinstance(name, six.integer_types), name)
+            key = (axis_index, not isinstance(name, six.integer_types), name)
+            return key
         names = sorted(space, key=axis_and_name)
         dim_by_name = {}
 
         metadata = self._coord_metadata
         coord_signature = self._coord_signature
         defns = coord_signature.scalar_defns
+
         vector_dim_coords_and_dims = coord_signature.vector_dim_coords_and_dims
         vector_aux_coords_and_dims = coord_signature.vector_aux_coords_and_dims
         signature = self._cube_signature
@@ -1663,7 +1665,6 @@ class ProtoCube(object):
                     axis_dict.get(iris.util.guess_coord_axis(coord),
                                   len(axis_dict) + 1),
                     coord._as_defn())
-
 
         # Order the coordinates by hints, axis, and definition.
         for coord in sorted(coords, key=key_func):

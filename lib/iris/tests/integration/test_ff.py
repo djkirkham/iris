@@ -1,4 +1,4 @@
-# (C) British Crown Copyright 2014 - 2017, Met Office
+# (C) British Crown Copyright 2014 - 2018, Met Office
 #
 # This file is part of Iris.
 #
@@ -113,7 +113,7 @@ class TestSkipField(tests.IrisTest):
         self.assertIn("Input field skipped as PPField creation failed : "
                       "error = 'Unsupported header release number: -32768'",
                       warn_fn.call_args[0][0])
-        self.assertEqual(fields.ndim , 3)
+        self.assertEqual(fields.ndim, 3)
         self.assertEqual(fields.shape[0], 2)
 
 

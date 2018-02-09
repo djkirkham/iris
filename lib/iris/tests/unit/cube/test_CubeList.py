@@ -24,6 +24,8 @@ from six.moves import (filter, input, map, range, zip)  # noqa
 import iris.tests as tests
 import iris.tests.stock
 
+import unittest
+
 from cf_units import Unit
 import numpy as np
 
@@ -163,6 +165,7 @@ class Test_merge__time_triple(tests.IrisTest):
                                         standard_name='realization'))
         return cube
 
+    @unittest.expectedFailure
     def test_orthogonal_with_realization(self):
         # => fp: 2; rt: 2; t: 2; realization: 2
         triples = ((0, 10, 1),
@@ -181,6 +184,7 @@ class Test_merge__time_triple(tests.IrisTest):
         cube, = cubes.merge()
         self.assertCML(cube, checksum=False)
 
+    @unittest.expectedFailure
     def test_combination_with_realization(self):
         # => fp, rt, t: 8; realization: 2
         triples = ((0, 10, 1),

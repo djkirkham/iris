@@ -1,3 +1,20 @@
+# (C) British Crown Copyright 2018, Met Office
+#
+# This file is part of Iris.
+#
+# Iris is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Lesser General Public License as published by the
+# Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Iris is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
+
 from __future__ import (absolute_import, division, print_function)
 from six.moves import (filter, input, map, range, zip)  # noqa
 import six
@@ -9,7 +26,8 @@ import numpy as np
 
 import iris.exceptions
 import iris.coords
-from iris._lazy_data import as_concrete_data, is_lazy_data, multidim_lazy_stack
+from iris._lazy_data import (as_concrete_data, as_lazy_data, is_lazy_data,
+                             multidim_lazy_stack)
 
 
 def _all_same(a):
@@ -36,10 +54,12 @@ def _element_indices(a):
             indices[e] = deque([i])
     return indices
 
+
 def _cells_points(cells, dtype):
     ret = np.empty_like(cells, dtype=dtype)
     ret.flat = [cell.point for cell in cells.flat]
     return ret
+
 
 def _cells_bounds(cells, dtype):
     if cells.size > 0 and cells.flat[0].bound is not None:
@@ -587,6 +607,16 @@ class ProtoCube(object):
 
         return _CoordPayload(scalar, vector, factory_defns)
 
+    def _report_duplicate(self, scalar_values):
+        name = self._cube_signature.defn.name()
+        scalars = []
+        for defn, value in zip(self._coord_signature.scalar_defns,
+                               scalar_values):
+            scalars.append('%s=%r' % (defn.name(), value))
+        msg = 'Duplicate %r cube, with scalar coordinates %s'
+        msg = msg % (name, ', '.join(scalars))
+        raise iris.exceptions.DuplicateDataError(msg)
+
     def register(self, cube, error_on_mismatch=False):
         """
         Add a compatible :class:`iris.cube.Cube` as a source-cube for
@@ -638,8 +668,10 @@ class ProtoCube(object):
         return scalar_values, data_stack
 
     def _choose_new_dims(self, candidate_shapes, candidate_dim_indices):
-        # XXX: Just choose the first for now
-        return candidate_shapes[0], candidate_dim_indices[0]
+        # XXX: Just choose the one with the most dimensions for now.
+        print(candidate_shapes, candidate_dim_indices)
+        i = np.argmax([len(cs) for cs in candidate_shapes])
+        return candidate_shapes[i], candidate_dim_indices[i]
 
     def _build_coordinates(self, scalar_values, dim_indices):
         ndims = scalar_values.ndim - 1
@@ -673,23 +705,19 @@ class ProtoCube(object):
                     (iris.coords.DimCoord(points, bounds=bounds, **kwargs),
                      dim_coord_dim))
             else:
-                if dim_indices:
+                if values.ndim == 1:
+                    # No new dimensions
+                    value_slice = ()
+                    coord_dims = ()
+                else:
                     # Find the indices spanned by the aux coord. If all the
                     # slices along a given dimension are the same, the coord
                     # does not span that dimension.
                     spans_dims = [np.any(values.take([0], axis=dim) != values)
                                   for dim in range(ndims)]
                     value_slice = tuple(slice(None) if spans_dim else 0
-                                         for spans_dim in spans_dims)
+                                        for spans_dim in spans_dims)
                     coord_dims = tuple(np.where(spans_dims)[0])
-                elif values.ndim == 1:
-                    # No new dimensions
-                    value_slice = ()
-                    coord_dims = ()
-                else:
-                    # Anonymous dimension
-                    value_slice = ()
-                    coord_dims = (0,)
 
                 points = _cells_points(values[value_slice],
                                        metadata.points_dtype)[..., 0]
@@ -742,27 +770,49 @@ class ProtoCube(object):
 
         return cube
 
-    def merge(self, unique=True):
-        import sys
-        print('SOURCE', self._source)
-        for defn in self._coord_signature.scalar_defns:
-            print('{} '.format(defn.standard_name or defn.long_name))
-        print()
+    def get_first_duplicate(self):
+        scalar_values = set()
+        for skeleton in self._skeletons:
+            sv = tuple(skeleton.scalar_values)
+            if sv in scalar_values:
+                return sv
+            scalar_values.add(sv)
+        return None
 
+    def merge(self, unique=True):
+        if unique:
+            duplicate_scalar_values = self.get_first_duplicate()
+            if duplicate_scalar_values:
+                self._report_duplicate(duplicate_scalar_values)
 
         ncoords = len(self._coord_metadata)
         nvalues = len(self._skeletons)
+
+        data_stack = np.empty(nvalues, 'object')
+        any_lazy = False
+        for i in range(nvalues):
+            data_i = self._skeletons[i].data
+            if is_lazy_data(data_i):
+                any_lazy = True
+            else:
+                data_i = as_lazy_data(data_i)
+            data_stack[i] = data_i
+
         scalar_values = np.empty((ncoords, nvalues), dtype=object)
         scalar_values.T[:] = [skeleton.scalar_values
                               for skeleton in self._skeletons]
+        # Only consider numeric coordinates when searching for potential dim
+        # coords.
+        is_numeric = np.array([metadata.points_dtype.kind not in 'SU'
+                               for metadata in self._coord_metadata],
+                              dtype=bool)
+        #is_monotonic = np.array([_cells_points(scalar_values)])
 
-        data_stack = np.empty(nvalues, 'object')
-        for i in range(nvalues):
-            data_stack[i] = self._skeletons[i].data
-        any_lazy = any(is_lazy_data(d) for d in data_stack)
+        numeric_scalar_values = scalar_values[is_numeric]
+        row_indices = np.arange(ncoords)[is_numeric]
 
         candidate_shapes, candidate_dim_indices = \
-            self._get_new_dims_candidates(scalar_values)
+            self._get_new_dims_candidates(numeric_scalar_values, row_indices)
 
         if candidate_shapes:
             shape, dim_indices = self._choose_new_dims(candidate_shapes,
@@ -777,14 +827,10 @@ class ProtoCube(object):
             scalar_values, data_stack = self._order_and_reshape(scalar_values,
                                                                 data_stack,
                                                                 shape,
-                                                                #list(range(
-                                                                #    ncoords)))
                                                                 None)
-
 
         new_dim_coords_and_dims, new_aux_coords_and_dims = \
             self._build_coordinates(scalar_values, dim_indices)
-
 
         # Create lists combining the new vector coordinates with the existing
         # ones, offsetting the dims of the existing coordinates by the number
@@ -891,7 +937,8 @@ class ProtoCube(object):
             if _all_same(counts) and counts[0] < nvalues:
                 count = counts[0]
                 dim_len = nvalues // count
-                DEBUG('It is a potential candidate dimension of length {}'.format(dim_len))
+                DEBUG('It is a potential candidate dimension of length {}'
+                      .format(dim_len))
                 DEBUG('    {}'.format(indices), level=2)
 
                 if count == 1:
@@ -983,15 +1030,21 @@ class ProtoCube(object):
                         # Only look at one subset of the values for the
                         # independent rows.
                         sub_values = \
-                            scalar_values[independents][ ..., indices[0]]
-                        DEBUG('There are potential extra dimensions at rows {}'.format([ row_indices[i] for i in independents]))
+                            scalar_values[independents][..., indices[0]]
+                        DEBUG('There are potential extra dimensions at rows '
+                              '{}'.format([row_indices[i]
+                                           for i in independents]))
                         DEBUG('Recursing with new array:', shift=4)
                         DEBUG(sub_values, level=2)
                         sub_shapes, sub_dim_indices = \
                             ProtoCube._get_new_dims_candidates(
                                 sub_values, row_indices[independents])
-                        DEBUG('Extending shapes: {}'.format([(dim_len,) + shape  for shape in sub_shapes]))
-                        DEBUG('Extending rows: {}'.format([[row] + dim_indices for dim_indices in sub_dim_indices]))
+                        DEBUG('Extending shapes: {}'.format([(dim_len,) + shape
+                                                             for shape in
+                                                             sub_shapes]))
+                        DEBUG('Extending rows: {}'.format([[row] + dim_indices
+                                                           for dim_indices in
+                                                           sub_dim_indices]))
                         # Extend each sub- dimension coord list and sub-shape
                         # with the current row index and length as a dimension
                         # coordinate.
@@ -1002,7 +1055,9 @@ class ProtoCube(object):
                              sub_dim_indices])
                     else:
                         # Add anonymous dimension
-                        DEBUG('There are no possible extra dimension coordinates. Adding this dimension with an anonymous dimension')
+                        DEBUG('There are no possible extra dimension '
+                              'coordinates. Adding this dimension with an '
+                              'anonymous dimension.')
                         candidate_shapes.append((dim_len, count))
                         candidate_dim_indices.append([row])
 
@@ -1011,12 +1066,14 @@ class ProtoCube(object):
             row_indices = row_indices[1:]
 
         DEBUG('Shapes found at this level: {}'.format(candidate_shapes))
-        DEBUG('Dim coords found at this level: {}'.format(candidate_dim_indices), shift=-4)
+        DEBUG('Dim coords found at this level: {}'.format(
+            candidate_dim_indices), shift=-4)
 
         return candidate_shapes, candidate_dim_indices
 
 DEBUG_LEVEL = 1
 ind = 0
+
 
 def DEBUG(s, shift=0, level=1):
     global ind
