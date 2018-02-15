@@ -28,6 +28,7 @@ import iris.exceptions
 import iris.coords
 from iris._lazy_data import (as_concrete_data, as_lazy_data, is_lazy_data,
                              multidim_lazy_stack)
+import iris.util
 
 
 def _all_same(a):
@@ -801,15 +802,28 @@ class ProtoCube(object):
         scalar_values = np.empty((ncoords, nvalues), dtype=object)
         scalar_values.T[:] = [skeleton.scalar_values
                               for skeleton in self._skeletons]
-        # Only consider numeric coordinates when searching for potential dim
-        # coords.
-        is_numeric = np.array([metadata.points_dtype.kind not in 'SU'
-                               for metadata in self._coord_metadata],
-                              dtype=bool)
-        #is_monotonic = np.array([_cells_points(scalar_values)])
 
-        numeric_scalar_values = scalar_values[is_numeric]
-        row_indices = np.arange(ncoords)[is_numeric]
+        def is_potential_dimcoord(points, bounds):
+            try:
+                iris.coords.DimCoord(points, bounds=bounds)
+                return True
+            except ValueError:
+                return False
+
+        points_list = [_cells_points(values, metadata.points_dtype)
+                       for values, metadata
+                       in zip(scalar_values, self._coord_metadata)]
+        bounds_list = [_cells_bounds(values, metadata.bounds_dtype)
+                       for values, metadata
+                       in zip(scalar_values, self._coord_metadata)]
+
+        potential_dimcoords = np.array(
+            [is_potential_dimcoord(points, bounds,)
+             for points, bounds
+             in zip(points_list, bounds_list)])
+
+        numeric_scalar_values = scalar_values[potential_dimcoords]
+        row_indices = np.arange(ncoords)[potential_dimcoords]
 
         candidate_shapes, candidate_dim_indices = \
             self._get_new_dims_candidates(numeric_scalar_values, row_indices)
